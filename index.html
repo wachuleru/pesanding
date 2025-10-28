@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Planning Poker - Pesar Historias</title>
+<style>
+  body { font-family: Inter, system-ui, Arial; margin:0; background:#0f1724; color:#e6eef8; }
+  .container { max-width:960px; margin:24px auto; padding:20px; background:#111827; border-radius:8px; box-shadow: 0 6px 18px rgba(0,0,0,0.6); }
+  h1 { margin:0 0 12px 0; font-size:20px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  input, button { padding:10px 12px; border-radius:6px; border:1px solid #223047; background:#0b1220; color:#e6eef8; }
+  button { cursor:pointer; border: none; background:#0ea5a4; color:#012; }
+  button.secondary { background:#334155; color:#e6eef8; }
+  .hidden { display:none; }
+  .room-area { margin-top:16px; }
+  .users { width:300px; border-right:1px solid #223047; padding-right:12px; }
+  .main { flex:1; padding-left:12px; min-width:300px; }
+  .user-item { display:flex; justify-content:space-between; padding:8px 6px; border-radius:4px; margin-bottom:6px; background:transparent; }
+  .vote-btn { padding:10px 14px; margin:6px; border-radius:6px; border:1px solid #223047; background:#061526; color:#e6eef8; cursor:pointer; min-width:64px; }
+  .vote-btn:disabled { opacity:0.35; cursor:not-allowed; }
+  .toolbar { display:flex; gap:8px; margin-bottom:12px; }
+  .small { font-size:13px; color:#9fb3c8; }
+  .top { display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+  .room-id { background:#071021; padding:6px 8px; border-radius:6px; font-family:monospace; }
+  .center { text-align:center; }
+  .counts-line { margin-top:8px; font-size:14px; color:#cfe8f3; }
+  .counts-pill { display:inline-block; padding:6px 8px; margin:4px; background:#031727; border-radius:6px; border:1px solid #123444; font-family:monospace; }
+  pre { white-space:pre-wrap; word-break:break-word; }
+</style>
+</head>
+<body>
+  <div class="container" id="app">
+    <div id="home">
+      <div class="top">
+        <h1>Planning Poker — Pesar Historias</h1>
+        <div class="small">Sin login — solo un nombre para identificarte</div>
+      </div>
+
+      <div class="row">
+        <div style="flex:1; min-width:260px;">
+          <label class="small">Tu nombre</label><br/>
+          <input id="username" placeholder="Ej: María, Juan, Dev1" />
+        </div>
+        <div style="width:240px;">
+          <label class="small">Código de sala (opcional)</label><br/>
+          <input id="roomInput" placeholder="p ej: sprint-5" />
+        </div>
+      </div>
+
+      <div style="margin-top:12px;" class="row">
+        <button id="createBtn">Crear sala nueva</button>
+        <button id="joinBtn" class="secondary">Ingresar a sala</button>
+      </div>
+
+      <div style="margin-top:20px;">
+        <div class="small">Nota: al crear sala se genera un id aleatorio que compartes con el equipo.</div>
+      </div>
+    </div>
+
+    <div id="room" class="hidden">
+      <div class="top">
+        <div>
+          <h1 id="titleRoom">Sala</h1>
+          <div class="small">Sala: <span id="roomId" class="room-id"></span> — Usuario: <strong id="me"></strong></div>
+        </div>
+        <div class="center">
+          <div class="toolbar">
+            <button id="resetBtn" class="secondary">Reiniciar votación</button>
+            <button id="leaveBtn" class="secondary">Salir</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="row room-area">
+        <div class="users">
+          <h3 style="margin-top:0">Conectados</h3>
+          <div id="usersList"></div>
+          <div class="small" style="margin-top:12px;">Votos por valor:</div>
+          <div id="counts" class="counts-line"></div>
+        </div>
+
+        <div class="main">
+          <h3 style="margin-top:0">Votación</h3>
+          <div id="info" class="small">Selecciona un valor. Los números elegidos por otros pueden o no bloquearse según la configuración del servidor.</div>
+          <div id="buttons" style="margin-top:10px; display:flex; flex-wrap:wrap;"></div>
+
+          <div style="margin-top:18px;">
+            <h4 style="margin-bottom:6px">Estado (debug)</h4>
+            <pre id="statePre" style="background:#071021;padding:8px;border-radius:6px;overflow:auto;"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const FIB = [1, 2, 3, 5, 8, 13, 21, 34];
+
+  // 💡 CONFIG: cambia YOUR_BACKEND_HOST por el dominio donde desplegarás el backend
+  const YOUR_BACKEND_HOST = "planning-backend.onrender.com"; // <- reemplaza
+  const backendHost = (location.hostname === "localhost" || location.hostname === "127.0.0.1")
+    ? "localhost:8000"
+    : YOUR_BACKEND_HOST;
+
+  const wsProtocol = location.protocol === "https:" ? "wss" : "ws";
+
+  let ws = null;
+  let room = null;
+  let user = null;
+
+  const el = id => document.getElementById(id);
+
+  function showHome() {
+    el("home").classList.remove("hidden");
+    el("room").classList.add("hidden");
+    if (ws) {
+      try { ws.close(); } catch(e) {}
+      ws = null;
+    }
+  }
+
+  function showRoom() {
+    el("home").classList.add("hidden");
+    el("room").classList.remove("hidden");
+  }
+
+  function generateRoomId() {
+    const r = Math.random().toString(36).slice(2,8);
+    return `room-${r}`;
+  }
+
+  el("createBtn").addEventListener("click", () => {
+    const name = el("username").value.trim();
+    if (!name) { alert("Ingresa un nombre de usuario"); return; }
+    user = name;
+    room = generateRoomId();
+    enterRoom();
+  });
+
+  el("joinBtn").addEventListener("click", () => {
+    const name = el("username").value.trim();
+    if (!name) { alert("Ingresa un nombre de usuario"); return; }
+    const r = el("roomInput").value.trim();
+    if (!r) { alert("Ingresa el código de sala"); return; }
+    user = name;
+    room = r;
+    enterRoom();
+  });
+
+  el("leaveBtn").addEventListener("click", () => {
+    if (confirm("Salir de la sala?")) showHome();
+  });
+
+  el("resetBtn").addEventListener("click", () => {
+    if (!ws) return;
+    ws.send(JSON.stringify({ type: "reset" }));
+  });
+
+  function renderButtons(available = FIB, counts = {}) {
+    const container = el("buttons");
+    container.innerHTML = "";
+    FIB.forEach(v => {
+      const btn = document.createElement("button");
+      const count = counts[v] || 0;
+      btn.textContent = `${v} ${count > 0 ? `(${count})` : ""}`;
+      btn.className = "vote-btn";
+      // Si el backend envía "available" y un valor no está, lo deshabilitamos.
+      if (Array.isArray(available) && available.length > 0) {
+        btn.disabled = !available.includes(v);
+      } else {
+        btn.disabled = false;
+      }
+      btn.addEventListener("click", () => {
+        if (!ws) return;
+        ws.send(JSON.stringify({ type: "vote", value: v }));
+      });
+      container.appendChild(btn);
+    });
+  }
+
+  function renderUsers(users) {
+    const ul = el("usersList");
+    ul.innerHTML = "";
+    Object.entries(users).forEach(([u, info]) => {
+      const div = document.createElement("div");
+      div.className = "user-item";
+      const left = document.createElement("div");
+      left.textContent = u;
+      const right = document.createElement("div");
+      right.textContent = info.vote === null ? "—" : String(info.vote);
+      div.appendChild(left);
+      div.appendChild(right);
+      ul.appendChild(div);
+    });
+  }
+
+  function renderCounts(counts) {
+    const wrap = el("counts");
+    wrap.innerHTML = "";
+    // Mostrar todos los FIB aunque no tengan votos
+    FIB.forEach(v => {
+      const c = counts && counts[v] ? counts[v] : 0;
+      const pill = document.createElement("span");
+      pill.className = "counts-pill";
+      pill.textContent = `${v} — ${c}`;
+      wrap.appendChild(pill);
+    });
+  }
+
+  function connectWS() {
+    const url = `${wsProtocol}://${backendHost}/ws?room=${encodeURIComponent(room)}&user=${encodeURIComponent(user)}`;
+    console.log("Conectando a", url);
+    ws = new WebSocket(url);
+
+    ws.addEventListener("open", () => {
+      el("roomId").textContent = room;
+      el("me").textContent = user;
+      showRoom();
+      ws.send(JSON.stringify({ type: "request_state" }));
+    });
+
+    ws.addEventListener("message", ev => {
+      try {
+        const msg = JSON.parse(ev.data);
+        handleMsg(msg);
+      } catch (e) {
+        console.error("Mensaje inválido:", ev.data);
+      }
+    });
+
+    ws.addEventListener("close", () => {
+      console.warn("WebSocket cerrado");
+    });
+
+    ws.addEventListener("error", (e) => {
+      console.error("Error WebSocket:", e);
+      alert("No se pudo conectar con el servidor. ¿Está corriendo el backend?");
+    });
+  }
+
+  function handleMsg(msg) {
+    if (!msg || !msg.type) return;
+    if (["state","joined","vote","reset","left"].includes(msg.type)) {
+      const state = msg.state || {};
+      // state = { users: {...}, available: [...], counts: {...} }
+      renderUsers(state.users || {});
+      renderButtons(state.available || FIB, state.counts || {});
+      renderCounts(state.counts || {});
+      el("statePre").textContent = JSON.stringify(state, null, 2);
+    } else if (msg.type === "error") {
+      alert("Error: " + (msg.msg || ""));
+    }
+  }
+
+  function enterRoom() {
+    connectWS();
+  }
+
+  // Soporte /room/<id>?user=...
+  (function handleDirectLink() {
+    const path = location.pathname;
+    const pathParts = path.split("/");
+    if (pathParts.length >= 3 && pathParts[1] === "room") {
+      const rid = decodeURIComponent(pathParts[2]);
+      const u = (new URLSearchParams(location.search)).get("user");
+      if (rid && u) {
+        user = u;
+        room = rid;
+        el("username").value = user;
+        el("roomInput").value = room;
+        enterRoom();
+      }
+    }
+  })();
+
+  ["username","roomInput"].forEach(id => {
+    el(id).addEventListener("keydown", e => {
+      if (e.key === "Enter") el("joinBtn").click();
+    });
+  });
+
+  // inicial render (vacío)
+  renderButtons(FIB, {});
+  renderCounts({});
+})();
+</script>
+</body>
+</html>
