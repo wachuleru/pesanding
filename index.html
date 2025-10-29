@@ -35,11 +35,12 @@
 </head>
 <body>
   <div class="container" id="app">
+    
     <!-- Pantalla inicial -->
     <div id="home">
       <div class="top">
         <h1>Planning Poker — Pesar Historias</h1>
-        <div class="small">Sin login — solo un nombre para identificarte</div>
+        
       </div>
 
   <div class="row">
@@ -97,13 +98,14 @@
       <h3 style="margin-top:0">Votación</h3>
       <div id="info" class="small">Selecciona un valor.</div>
       <div id="buttons" style="margin-top:10px;"></div>
+      <div id="chartContainer" style="width:100%; max-width:600px; height:400px; margin:auto;"></div>
     </div>
   </div>
 </div>
 
 
   </div>
-
+<script src="https://code.highcharts.com/highcharts.js"></script>
 <script>
 (() => {
   const FIB = [1, 2, 3, 5, 8, 13, 21, 34];
@@ -219,10 +221,12 @@
     if (!msg?.type) return;
     if (["state","joined","vote","reset","left","title_set"].includes(msg.type)) {
       const state = msg.state;
+      console.log(msg);
       renderUsers(state.users);
       renderButtons(state.available);
       el("titleInput").value = state.title || "";
       el("titleRoom").textContent = state.title ? `Historia: ${state.title}` : "Sin título";
+      updateChart(msg.state);
       renderHistory(state.history);
     } else if (msg.type === "error") alert("Error: " + msg.msg);
   }
@@ -242,7 +246,99 @@
   ["username","roomInput"].forEach((id) => {
     el(id).addEventListener("keydown",(e)=>{ if(e.key==="Enter") el("joinBtn").click(); });
   });
+
+  // === 🔥 NUEVO BLOQUE: Monitoreo del backend ===
+  function createBackendStatusElement() {
+    const div = document.createElement("div");
+    div.id = "backend-status";
+    div.style.cssText = `
+      padding: 8px 12px;
+      border-radius: 8px;
+      text-align: center;
+      font-family: sans-serif;
+      background-color: #ccc;
+      color: #333;
+      width: fit-content;
+      margin: 10px auto;
+    `;
+    div.textContent = "🔄 Verificando backend...";
+    document.body.prepend(div);
+  }
+
+  async function checkBackendHealth() {
+    const backendHost = "backpesanding.onrender.com"; // sin http
+    const protocol = window.location.protocol === "https:" ? "https" : "http";
+    const wsProtocol = protocol === "https" ? "wss" : "ws";
+    const statusEl = document.getElementById("backend-status");
+    const httpProtocol = window.location.protocol === "https:" ? "https" : "http";
+    const backendURL = `https://${backendHost}/health`;
+
+    try {
+      const res = await fetch(backendURL);
+      if (!res.ok) throw new Error("Error HTTP");
+      const data = await res.json();
+
+      statusEl.textContent = "✅ Servicio activo";
+      statusEl.style.backgroundColor = "#28a745";
+      statusEl.style.color = "#fff";
+      console.log("Backend OK:", data.status || data.message);
+    } catch (err) {
+      console.error("❌ Backend no disponible:", err);
+      statusEl.textContent = "❌ Backend no disponible";
+      statusEl.style.backgroundColor = "#dc3545";
+      statusEl.style.color = "#fff";
+    }
+  }
+
+  // Crear indicador y revisar cada 10 segundos
+  createBackendStatusElement();
+  checkBackendHealth();
+  setInterval(checkBackendHealth, 10000);
 })();
+
+
+const chart = Highcharts.chart("chartContainer", {
+    chart: {
+      type: "pie",
+      backgroundColor: 'rgba(0, 0, 0, 0.1)'
+    },
+    title: {
+      text: "Conteo de votos",
+      style: { color: '#FFFFFF' }
+    },
+    series: [{
+      name: "Votos",
+      colorByPoint: true,
+      data: []
+    }],
+    tooltip: {
+      pointFormat: "<b>{point.y} votos ({point.percentage:.1f}%)</b>"
+    },
+    accessibility: {
+      point: { valueSuffix: "%" }
+    }
+  });
+
+  // === Función para actualizar los datos del gráfico ===
+  function updateChart(state) {
+    if (!state || !state.counts) return;
+
+    let data = Object.entries(state.counts).map(([key, value]) => ({
+      name: key,
+      y: value
+    }));
+    console.log('data',data)
+    data = data.filter(d =>  d.y >0 );
+    console.log('data2',data)
+    // Agregar cantidad de no votantes si existe
+    if (state.counts.no_votaron !== undefined) {
+      data.push({ name: "No votaron", y: state.counts.no_votaron, color: "#ccc" });
+    }
+    
+    chart.series[0].setData(data, true);
+  }
+
+  
 </script>
 
 </body>
