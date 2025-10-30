@@ -69,7 +69,14 @@
   <div class="top">
     <div>
       <h1 id="titleRoom">Sala</h1>
-      <div class="small">Sala: <span id="roomId" class="room-id"></span> — Usuario: <strong id="me"></strong></div>
+      <div class="small d-flex align-items-center gap-2">
+          Sala:
+          <span id="roomId" class="room-id fw-bold"></span>
+          <button id="copyRoomBtn" class="btn btn-sm btn-outline-secondary" title="Copiar código de sala">
+            📋 Copiar
+          </button>
+          — Usuario: <strong id="me"></strong>
+      </div>
     </div>
     <div class="center">
       <div class="toolbar">
@@ -338,7 +345,27 @@ const chart = Highcharts.chart("chartContainer", {
     chart.series[0].setData(data, true);
   }
 
-  
+  document.addEventListener("DOMContentLoaded", () => {
+    const copyBtn = document.getElementById("copyRoomBtn");
+    const roomSpan = document.getElementById("roomId");
+
+    copyBtn.addEventListener("click", async () => {
+      const roomCode = roomSpan.textContent.trim();
+      if (!roomCode) {
+        alert("No hay un código de sala para copiar.");
+        return;
+      }
+
+      try {
+        await navigator.clipboard.writeText(roomCode);
+        copyBtn.textContent = "✅ Copiado";
+        setTimeout(() => (copyBtn.textContent = "📋 Copiar"), 2000);
+      } catch (err) {
+        console.error("Error al copiar:", err);
+        alert("No se pudo copiar el código.");
+      }
+    });
+  });
 </script>
 
 </body>
